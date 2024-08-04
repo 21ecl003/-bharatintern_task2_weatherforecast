@@ -1,0 +1,106 @@
+services:
+  database:
+    # 8.0.35 in prod
+    image: mysql:8.0
+    networks:
+      - weather.gov
+    environment:
+      MYSQL_DATABASE: weathergov
+      MYSQL_USER: drupal
+      MYSQL_PASSWORD: drupal
+      MYSQL_ROOT_PASSWORD: drupal
+    ports:
+      - 3306:3306
+
+  api-proxy:
+    build:
+      context: ./tests/api
+      dockerfile: Dockerfile
+    environment:
+      WX_NOW_TIMESTAMP: ${WX_NOW_TIMESTAMP}
+    networks:
+      - weather.gov
+    ports:
+      - 8081:8081
+    volumes:
+      - ./tests/api:/app
+      - /app/node_modules
+
+  drupal:
+    build:
+      context: ./
+      dockerfile: Dockerfile.dev
+    image: 18f-zscaler-drupal:10-apache
+    ports:
+      - 8080:80
+    networks:
+      - weather.gov
+    links:
+      - database
+      - api-proxy
+    environment:
+      API_URL: http://api-proxy:8081
+      DRUPAL_DB_NAME: weathergov
+      DRUPAL_DB_USERNAME: drupal
+      DRUPAL_DB_PASSWORD: drupal
+      DRUPAL_DB_HOST: database
+      DRUPAL_DB_PORT: 3306
+      WX_NOW_TIMESTAMP: ${WX_NOW_TIMESTAMP}
+    volumes:
+      # Map in our composer files. That way if we make changes inside the
+      # container, they'll be persisted out here in the real world.
+      - ./composer.json:/opt/drupal/composer.json
+      - ./composer.lock:/opt/drupal/composer.lock
+
+      # Map in our sites directory. This includes our settings.php.
+      - ./web/sites:/opt/drupal/web/sites
+
+      # Map in our modules, themes, and site settings. But be sure not to map in
+      # any contrib directories, since those are 3rd-party installs from
+      # composer. If we map them in, we'll overwrite what's in the container,
+      # and we don't really want that.
+      - ./web/modules:/opt/drupal/web/modules
+      - ./web/themes:/opt/drupal/web/themes
+      - /opt/drupal/web/modules/contrib
+      - /opt/drupal/web/themes/contrib
+
+      # Map in saved configuration. This is used to import configuration and it
+      # is also where configuration gets exported to. The target/container
+      # directory needs to match the value of $settings['config_sync_directory']
+      # in settings.php
+      - ./web/config:/opt/drupal/web/config
+      - ./web/scs-export:/opt/drupal/web/scs-export
+
+      # And finally map in our phpcs file, so we can run php-codesniffer inside
+      # the container.
+      - ./phpcs.xml:/opt/drupal/phpcs.xml
+      - ./phpunit.xml:/opt/drupal/phpunit.xml
+
+      # Map in our test coverage directory so we can have those pretty outputs.
+      - ./.coverage:/coverage
+
+  plantuml:
+    build:
+      context: ./
+      dockerfile: Dockerfile.plantuml
+    image: 18f-zscaler-plantum:jetty
+    ports:
+      - 8180:8080
+    profiles: ["utilities"]
+
+  spatial:
+      build:
+        context: ./spatial-data
+        dockerfile: Dockerfile.spatial
+      image: 18f-spatial-node:20
+      profiles: ["spatial"]
+      networks:
+        - weather.gov
+      links:
+        - database
+      volumes:
+        - ./spatial-data/:/app
+        - /app/node_modules
+
+networks:
+  weather.gov:
